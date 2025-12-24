@@ -1,0 +1,1 @@
+<?php //sanity buffer Kunferman, C. R. (2025). Alpha Pi and and Recursive Phi as safety equations preventing infinite poles in AI Coherency (1.0). C.R. Kunferman. https://doi.org/10.5281/zenodo.18007988
