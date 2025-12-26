@@ -24,7 +24,7 @@ class Vector3 {
     
     public function normalize(): Vector3 {
         $mag = $this->magnitude();
-        if ($mag == 0) return new Vector3(0, 0, 1);
+        if (abs($mag) < 1e-15) return new Vector3(0, 0, 1);
         return new Vector3($this->x/$mag, $this->y/$mag, $this->z/$mag);
     }
     
@@ -116,7 +116,7 @@ class GeodesicCalculations {
                 ($cosU1 * $sinU2 - $sinU1 * $cosU2 * $cosLambda)**2
             );
             
-            if ($sinSigma == 0) return 0.0; // Coincident points
+            if (abs($sinSigma) < 1e-15) return 0.0; // Coincident points
             
             $cosSigma = $sinU1 * $sinU2 + $cosU1 * $cosU2 * $cosLambda;
             $sigma = atan2($sinSigma, $cosSigma);
