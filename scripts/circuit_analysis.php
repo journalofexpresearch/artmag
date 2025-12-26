@@ -31,8 +31,8 @@ class Complex {
     
     public function divide(Complex $b): Complex {
         $denom = $b->real**2 + $b->imag**2;
-        if ($denom == 0) return new Complex(PHP_FLOAT_MAX, 0);
-        
+        if (abs($denom) < 1e-15) return new Complex(PHP_FLOAT_MAX, 0);
+
         return new Complex(
             ($this->real * $b->real + $this->imag * $b->imag) / $denom,
             ($this->imag * $b->real - $this->real * $b->imag) / $denom
@@ -98,7 +98,7 @@ class Impedance {
      * Calculate capacitor impedance: Z = -j/(ωC)
      */
     public static function capacitor(float $capacitance, float $frequency): Complex {
-        if ($frequency == 0) {
+        if (abs($frequency) < 1e-15) {
             return new Complex(PHP_FLOAT_MAX, 0); // Open circuit for DC
         }
         $omega = 2 * M_PI * $frequency;
@@ -426,7 +426,7 @@ class CircuitMetrics {
         float $outputPower,
         float $inputPower
     ): float {
-        if ($inputPower == 0) return 0.0;
+        if (abs($inputPower) < 1e-15) return 0.0;
         return ($outputPower / $inputPower) * 100; // Percentage
     }
     
@@ -437,7 +437,7 @@ class CircuitMetrics {
         float $noLoadVoltage,
         float $fullLoadVoltage
     ): float {
-        if ($fullLoadVoltage == 0) return 0.0;
+        if (abs($fullLoadVoltage) < 1e-15) return 0.0;
         return (($noLoadVoltage - $fullLoadVoltage) / $fullLoadVoltage) * 100;
     }
     
