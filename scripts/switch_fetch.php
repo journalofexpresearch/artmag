@@ -178,7 +178,181 @@ try {
                 'magnitude' => $totalField->magnitude()
             ]);
             break;
-        
+
+        // Calculate 3D magnetic field grid
+        case 'calc_field_grid':
+            require_once __DIR__ . '/magnetic_field.php';
+
+            // Get grid parameters
+            $xMin = floatval($_GET['xMin'] ?? -1);
+            $xMax = floatval($_GET['xMax'] ?? 1);
+            $yMin = floatval($_GET['yMin'] ?? -1);
+            $yMax = floatval($_GET['yMax'] ?? 1);
+            $zMin = floatval($_GET['zMin'] ?? -1);
+            $zMax = floatval($_GET['zMax'] ?? 1);
+            $resolution = intval($_GET['resolution'] ?? 10);
+            $centerLat = floatval($_GET['centerLat'] ?? 0);
+            $centerLon = floatval($_GET['centerLon'] ?? 0);
+            $centerAlt = floatval($_GET['centerAlt'] ?? 0);
+
+            // Clamp resolution to prevent overload
+            $resolution = max(5, min($resolution, 30));
+
+            // Collect all magnetic sources from circuit components
+            $sources = [];
+            foreach ($state->project->components as $comp) {
+                if ($comp->category === 'magnetic' && !$comp->isFailed && $comp->currentFlow > 1e-9) {
+                    $compLat = $comp->properties->latitude ?? $centerLat;
+                    $compLon = $comp->properties->longitude ?? $centerLon;
+                    $compAlt = $comp->properties->altitude ?? $centerAlt;
+
+                    switch ($comp->type) {
+                        case 'coil':
+                            $sources[] = [
+                                'type' => 'loop',
+                                'lat' => $compLat,
+                                'lon' => $compLon,
+                                'alt' => $compAlt,
+                                'radius' => $comp->properties->radius ?? 0.01,
+                                'turns' => $comp->properties->turns ?? 100,
+                                'current' => $comp->currentFlow,
+                                'componentId' => $comp->id
+                            ];
+                            break;
+
+                        case 'solenoid':
+                            // Solenoid approximation: multiple stacked loops
+                            $length = $comp->properties->length ?? 0.1;
+                            $radius = $comp->properties->radius ?? 0.02;
+                            $turns = $comp->properties->turns ?? 500;
+                            $loopSpacing = $length / max($turns, 1);
+
+                            // Sample every Nth turn to avoid too many sources
+                            $sampleRate = max(1, intval($turns / 20));
+                            for ($i = 0; $i < $turns; $i += $sampleRate) {
+                                $zOffset = ($i / max($turns - 1, 1) - 0.5) * $length;
+                                $sources[] = [
+                                    'type' => 'loop',
+                                    'lat' => $compLat,
+                                    'lon' => $compLon,
+                                    'alt' => $compAlt + $zOffset,
+                                    'radius' => $radius,
+                                    'turns' => $sampleRate,
+                                    'current' => $comp->currentFlow,
+                                    'componentId' => $comp->id
+                                ];
+                            }
+                            break;
+
+                        case 'helmholtz':
+                            $radius = $comp->properties->radius ?? 0.1;
+                            $turns = $comp->properties->turns ?? 100;
+                            $separation = $comp->properties->separation ?? 0.1;
+
+                            // Two coils separated along z-axis
+                            $sources[] = [
+                                'type' => 'loop',
+                                'lat' => $compLat,
+                                'lon' => $compLon,
+                                'alt' => $compAlt - $separation/2,
+                                'radius' => $radius,
+                                'turns' => $turns,
+                                'current' => $comp->currentFlow,
+                                'componentId' => $comp->id . '_coil1'
+                            ];
+                            $sources[] = [
+                                'type' => 'loop',
+                                'lat' => $compLat,
+                                'lon' => $compLon,
+                                'alt' => $compAlt + $separation/2,
+                                'radius' => $radius,
+                                'turns' => $turns,
+                                'current' => $comp->currentFlow,
+                                'componentId' => $comp->id . '_coil2'
+                            ];
+                            break;
+                    }
+                }
+            }
+
+            // Calculate field grid
+            $gridPoints = [];
+            $xStep = ($xMax - $xMin) / max($resolution - 1, 1);
+            $yStep = ($yMax - $yMin) / max($resolution - 1, 1);
+            $zStep = ($zMax - $zMin) / max($resolution - 1, 1);
+
+            for ($i = 0; $i < $resolution; $i++) {
+                for ($j = 0; $j < $resolution; $j++) {
+                    for ($k = 0; $k < $resolution; $k++) {
+                        $x = $xMin + $i * $xStep;
+                        $y = $yMin + $j * $yStep;
+                        $z = $zMin + $k * $zStep;
+
+                        // Calculate field at this point
+                        $totalField = new Vector3(0, 0, 0);
+
+                        foreach ($sources as $source) {
+                            if ($source['type'] === 'loop') {
+                                // Use local Cartesian approximation for small scales
+                                $fieldContribution = SphericalMagneticField::geoCircularLoop(
+                                    $source['lat'],
+                                    $source['lon'],
+                                    $source['alt'] + $z,
+                                    $source['radius'],
+                                    $source['turns'],
+                                    $source['current'],
+                                    $centerLat,
+                                    $centerLon,
+                                    $centerAlt + $z,
+                                    36,  // Fewer segments for grid calculation
+                                    1.0
+                                );
+                                $totalField = $totalField->add($fieldContribution);
+                            }
+                        }
+
+                        $magnitude = $totalField->magnitude();
+
+                        // Only include points with significant field strength
+                        if ($magnitude > 1e-15) {
+                            $gridPoints[] = [
+                                'position' => ['x' => $x, 'y' => $y, 'z' => $z],
+                                'field' => [
+                                    'x' => $totalField->x,
+                                    'y' => $totalField->y,
+                                    'z' => $totalField->z
+                                ],
+                                'magnitude' => $magnitude
+                            ];
+                        }
+                    }
+                }
+            }
+
+            echo json_encode([
+                'grid' => $gridPoints,
+                'resolution' => $resolution,
+                'bounds' => [
+                    'xMin' => $xMin, 'xMax' => $xMax,
+                    'yMin' => $yMin, 'yMax' => $yMax,
+                    'zMin' => $zMin, 'zMax' => $zMax
+                ],
+                'sources' => array_map(function($s) {
+                    return [
+                        'type' => $s['type'],
+                        'position' => [
+                            'lat' => $s['lat'],
+                            'lon' => $s['lon'],
+                            'alt' => $s['alt']
+                        ],
+                        'radius' => $s['radius'] ?? 0,
+                        'current' => $s['current'] ?? 0
+                    ];
+                }, $sources),
+                'totalPoints' => count($gridPoints)
+            ]);
+            break;
+
         default:
             echo json_encode(['error' => 'Unknown action']);
     }
