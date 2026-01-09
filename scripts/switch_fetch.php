@@ -91,7 +91,7 @@ try {
         case 'sim_step':
             $dt = $_GET['dt'] ?? $_POST['dt'] ?? 0.001;
             $state->stepSimulation($dt);
-            
+
             // Return updated component temps
             $temps = [];
             foreach ($state->project->components as $c) {
@@ -102,11 +102,31 @@ try {
             }
             echo json_encode(['time' => $state->simulation->time, 'components' => $temps]);
             break;
-        
+
+        // Reset simulation
+        case 'sim_reset':
+            $state->resetSimulation();
+            echo json_encode(['time' => 0, 'running' => false]);
+            break;
+
         // Get all components (for rendering)
         case 'get_components':
             $comps = array_map(fn($c) => $c->toArray(), $state->project->components);
             echo json_encode($comps);
+            break;
+
+        // Get single component by ID
+        case 'get_component':
+            $id = $_GET['id'] ?? $_POST['id'] ?? null;
+            if ($id) {
+                foreach ($state->project->components as $c) {
+                    if ($c->id === $id) {
+                        echo json_encode($c->toArray());
+                        break 2;
+                    }
+                }
+            }
+            echo json_encode(['error' => 'Component not found']);
             break;
         
         // Get all wires

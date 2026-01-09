@@ -305,10 +305,10 @@ class CircuitState {
                         id: $comp->id,
                         startNode: $comp->ports[0]->id,
                         endNode: $comp->ports[1]->id,
-                        current: 0.0,
                         impedance: $impedance,
                         type: $branchType,
-                        value: $value
+                        value: $value,
+                        current: 0.0
                     );
                 }
             }
@@ -320,10 +320,10 @@ class CircuitState {
                 id: $wire->id,
                 startNode: $wire->startPortId,
                 endNode: $wire->endPortId,
-                current: 0.0,
                 impedance: Impedance::resistor(0.01), // Small wire resistance
                 type: 'wire',
-                value: 0.01
+                value: 0.01,
+                current: 0.0
             );
         }
         

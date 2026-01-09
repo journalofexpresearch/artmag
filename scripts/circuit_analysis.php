@@ -77,10 +77,10 @@ class CircuitBranch {
         public string $id,
         public string $startNode,
         public string $endNode,
-        public float $current = 0.0,
         public Complex $impedance,
         public string $type,  // 'resistor', 'capacitor', 'inductor', 'wire', 'source'
-        public float $value   // Resistance, capacitance, inductance, or voltage
+        public float $value,  // Resistance, capacitance, inductance, or voltage
+        public float $current = 0.0
     ) {}
 }
 
