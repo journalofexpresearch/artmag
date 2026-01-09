@@ -25,9 +25,30 @@ try {
             $type = $_GET['type'] ?? $_POST['type'];
             $x = $_GET['x'] ?? $_POST['x'] ?? 100;
             $y = $_GET['y'] ?? $_POST['y'] ?? 100;
-            
+
             $comp = $state->addComponent($type, ['x' => $x, 'y' => $y]);
-            echo json_encode($comp->toArray());
+
+            // Return rendered HTML
+            $icon = match($comp->type) {
+                'resistor' => '⏛',
+                'capacitor' => '⊣⊢',
+                'inductor' => '⌇',
+                'dcSource' => '⊕',
+                'acSource' => '∿',
+                'ground' => '⏚',
+                'coil' => '◎',
+                'solenoid' => '⌬',
+                'toroid' => '◯',
+                'helmholtz' => '◎◎',
+                default => '?'
+            };
+
+            echo "<div class='circuit-component' id='{$comp->id}'
+                  style='left: {$comp->position['x']}px; top: {$comp->position['y']}px;'
+                  data-id='{$comp->id}'>
+                <div style='font-size: 20px;'>{$icon}</div>
+                <div>{$comp->name}</div>
+            </div>";
             break;
         
         // Remove component
@@ -115,18 +136,118 @@ try {
             echo json_encode($comps);
             break;
 
-        // Get single component by ID
-        case 'get_component':
+        // Render all components on canvas (returns HTML)
+        case 'render_canvas':
+            foreach ($state->project->components as $comp) {
+                $icon = match($comp->type) {
+                    'resistor' => '⏛',
+                    'capacitor' => '⊣⊢',
+                    'inductor' => '⌇',
+                    'dcSource' => '⊕',
+                    'acSource' => '∿',
+                    'ground' => '⏚',
+                    'coil' => '◎',
+                    'solenoid' => '⌬',
+                    'toroid' => '◯',
+                    'helmholtz' => '◎◎',
+                    default => '?'
+                };
+
+                $borderColor = match($comp->warningLevel) {
+                    'critical' => '#f00',
+                    'high' => '#fa0',
+                    'medium' => '#ff0',
+                    'low' => '#0f0',
+                    default => '#0ff'
+                };
+
+                echo "<div class='circuit-component' id='{$comp->id}'
+                      style='left: {$comp->position['x']}px; top: {$comp->position['y']}px; border-color: {$borderColor};'
+                      data-id='{$comp->id}'>
+                    <div style='font-size: 20px;'>{$icon}</div>
+                    <div>{$comp->name}</div>
+                </div>";
+            }
+            break;
+
+        // Render properties panel for selected component (returns HTML)
+        case 'render_properties':
             $id = $_GET['id'] ?? $_POST['id'] ?? null;
+            $comp = null;
+
             if ($id) {
                 foreach ($state->project->components as $c) {
                     if ($c->id === $id) {
-                        echo json_encode($c->toArray());
-                        break 2;
+                        $comp = $c;
+                        break;
                     }
                 }
             }
-            echo json_encode(['error' => 'Component not found']);
+
+            if (!$comp) {
+                echo "<p style='color: #666; font-style: italic;'>Select a component to edit properties</p>";
+                break;
+            }
+
+            echo "<h4 style='color: #0ff; margin-bottom: 10px;'>{$comp->name}</h4>";
+
+            if ($comp->properties->resistance !== null) {
+                echo "<div class='prop-group'>
+                    <label>Resistance (Ω)</label>
+                    <input type='number' value='{$comp->properties->resistance}'
+                           onchange=\"updateProperty('{$comp->id}', 'resistance', this.value)\">
+                </div>";
+            }
+
+            if ($comp->properties->voltage !== null) {
+                echo "<div class='prop-group'>
+                    <label>Voltage (V)</label>
+                    <input type='number' value='{$comp->properties->voltage}'
+                           onchange=\"updateProperty('{$comp->id}', 'voltage', this.value)\">
+                </div>";
+            }
+
+            if ($comp->properties->capacitance !== null) {
+                echo "<div class='prop-group'>
+                    <label>Capacitance (F)</label>
+                    <input type='number' step='0.000001' value='{$comp->properties->capacitance}'
+                           onchange=\"updateProperty('{$comp->id}', 'capacitance', this.value)\">
+                </div>";
+            }
+
+            if ($comp->properties->inductance !== null) {
+                echo "<div class='prop-group'>
+                    <label>Inductance (H)</label>
+                    <input type='number' step='0.001' value='{$comp->properties->inductance}'
+                           onchange=\"updateProperty('{$comp->id}', 'inductance', this.value)\">
+                </div>";
+            }
+
+            if ($comp->properties->turns !== null) {
+                echo "<div class='prop-group'>
+                    <label>Turns</label>
+                    <input type='number' value='{$comp->properties->turns}'
+                           onchange=\"updateProperty('{$comp->id}', 'turns', this.value)\">
+                </div>";
+            }
+
+            if ($comp->properties->radius !== null) {
+                echo "<div class='prop-group'>
+                    <label>Radius (m)</label>
+                    <input type='number' step='0.01' value='{$comp->properties->radius}'
+                           onchange=\"updateProperty('{$comp->id}', 'radius', this.value)\">
+                </div>";
+            }
+
+            echo "<div class='prop-group'>
+                <label>Temperature</label>
+                <input type='text' value='{$comp->temperature}°C' readonly>
+            </div>";
+
+            echo "<div class='prop-group'>
+                <label>Current</label>
+                <input type='text' value='{$comp->currentFlow}A' readonly>
+            </div>";
             break;
         
         // Get all wires

@@ -354,109 +354,57 @@ canvas.addEventListener('dragover', (e) => {
   e.dataTransfer.dropEffect = 'copy';
 });
 
+// Helper function to attach event handlers to a component
+function attachComponentHandlers(comp) {
+  comp.addEventListener('click', () => selectComponent(comp.dataset.id));
+
+  comp.addEventListener('mousedown', (e) => {
+    draggedComponent = comp;
+    const rect = comp.getBoundingClientRect();
+    dragOffsetX = e.clientX - rect.left;
+    dragOffsetY = e.clientY - rect.top;
+    e.stopPropagation();
+  });
+}
+
 canvas.addEventListener('drop', async (e) => {
   e.preventDefault();
   const type = e.dataTransfer.getData('componentType');
   const rect = canvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  
-  // Call PHP backend
+
+  // Fetch server-rendered component HTML
   const response = await fetch(`scripts/switch_fetch.php?action=add_component&type=${type}&x=${x}&y=${y}`);
-  const comp = await response.json();
-  
-  if (comp.id) {
-    renderComponent(comp);
-    updateComponentCount();
+  const html = await response.text();
+
+  // Insert into canvas
+  canvas.insertAdjacentHTML('beforeend', html);
+
+  // Attach event listeners to new component
+  const newComp = canvas.lastElementChild;
+  if (newComp) {
+    attachComponentHandlers(newComp);
   }
+
+  updateComponentCount();
 });
 
-// Render component on canvas
-function renderComponent(comp) {
-  const div = document.createElement('div');
-  div.className = 'circuit-component';
-  div.id = comp.id;
-  div.style.left = comp.position.x + 'px';
-  div.style.top = comp.position.y + 'px';
-  div.innerHTML = `
-    <div style="font-size: 20px;">${getComponentIcon(comp.type)}</div>
-    <div>${comp.name}</div>
-  `;
-  
-  // Make draggable
-  div.draggable = true;
-  div.addEventListener('dragstart', (e) => {
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('componentId', comp.id);
-  });
-  
-  // Click to select
-  div.addEventListener('click', () => selectComponent(comp.id));
-  
-  canvas.appendChild(div);
-}
-
-function getComponentIcon(type) {
-  const icons = {
-    resistor: '⏛', capacitor: '⊣⊢', inductor: '⌇',
-    dcSource: '⊕', acSource: '∿', ground: '⏚',
-    coil: '◎', solenoid: '⌬', toroid: '◯'
-  };
-  return icons[type] || '?';
-}
-
-// Select component
+// Select component and render properties
 async function selectComponent(id) {
   document.querySelectorAll('.circuit-component').forEach(c => c.classList.remove('selected'));
   document.getElementById(id)?.classList.add('selected');
-  
+
   selectedComponentId = id;
-  
-  // Fetch component data
-  const response = await fetch(`scripts/switch_fetch.php?action=get_component&id=${id}`);
-  const comp = await response.json();
-  
-  // Show properties
-  showProperties(comp);
-  
+
+  // Fetch server-rendered properties HTML
+  const response = await fetch(`scripts/switch_fetch.php?action=render_properties&id=${id}`);
+  const html = await response.text();
+
+  document.getElementById('prop-content').innerHTML = html;
+
   // Tell backend about selection
   await fetch(`scripts/switch_fetch.php?action=select&id=${id}`);
-}
-
-// Show component properties
-function showProperties(comp) {
-  const propContent = document.getElementById('prop-content');
-  let html = `<h4 style="color: #0ff; margin-bottom: 10px;">${comp.name}</h4>`;
-  
-  // Show relevant properties based on type
-  if (comp.properties.resistance !== undefined) {
-    html += `
-      <div class="prop-group">
-        <label>Resistance (Ω)</label>
-        <input type="number" value="${comp.properties.resistance}" 
-               onchange="updateProperty('${comp.id}', 'resistance', this.value)">
-      </div>`;
-  }
-  
-  if (comp.properties.voltage !== undefined) {
-    html += `
-      <div class="prop-group">
-        <label>Voltage (V)</label>
-        <input type="number" value="${comp.properties.voltage}" 
-               onchange="updateProperty('${comp.id}', 'voltage', this.value)">
-      </div>`;
-  }
-  
-  if (comp.properties.turns !== undefined) {
-    html += `
-      <div class="prop-group">
-        <label>Turns</label>
-        <input type="number" value="${comp.properties.turns}" 
-               onchange="updateProperty('${comp.id}', 'turns', this.value)">
-      </div>`;
-  }
-  
-  propContent.innerHTML = html;
 }
 
 // Update component property
@@ -477,6 +425,7 @@ document.getElementById('btn-start').addEventListener('click', async () => {
 });
 
 document.getElementById('btn-stop').addEventListener('click', async () => {
+  simRunning = false; // Stop the simulation loop
   await fetch('scripts/switch_fetch.php?action=sim_stop');
   document.getElementById('btn-start').classList.remove('active');
   document.getElementById('status-message').textContent = 'Simulation stopped';
@@ -488,53 +437,91 @@ document.getElementById('btn-reset').addEventListener('click', async () => {
   document.getElementById('status-message').textContent = 'Simulation reset';
 });
 
-// Simulation loop
+// Simulation loop - re-render canvas from server periodically
 let simRunning = false;
 async function startSimulationLoop() {
   simRunning = true;
-  
+
   async function loop() {
     if (!simRunning) return;
-    
+
+    // Step simulation on server
     const response = await fetch('scripts/switch_fetch.php?action=sim_step&dt=0.01');
     const data = await response.json();
-    
+
     // Update display
     document.getElementById('sim-time').textContent = data.time.toFixed(3);
-    
-    // Update component visuals based on temperature
-    for (let id in data.components) {
-      const elem = document.getElementById(id);
-      if (elem) {
-        const temp = data.components[id].temp;
-        const warning = data.components[id].warning;
-        
-        // Color based on temperature
-        if (warning === 'critical') {
-          elem.style.borderColor = '#f00';
-        } else if (warning === 'high') {
-          elem.style.borderColor = '#fa0';
-        } else {
-          elem.style.borderColor = '#0ff';
-        }
-      }
-    }
-    
-    setTimeout(loop, 50); // 20 FPS
+
+    // Re-render canvas from server to show updated component states
+    renderCanvas();
+
+    setTimeout(loop, 100); // 10 FPS (server rendering is heavier)
   }
-  
+
   loop();
 }
 
-// Update component count
-async function updateComponentCount() {
-  const response = await fetch('scripts/switch_fetch.php?action=get_components');
-  const comps = await response.json();
-  document.getElementById('comp-count').textContent = comps.length;
+// Component dragging state
+let draggedComponent = null;
+let dragOffsetX = 0;
+let dragOffsetY = 0;
+
+// Re-render entire canvas from server
+async function renderCanvas() {
+  const response = await fetch('scripts/switch_fetch.php?action=render_canvas');
+  const html = await response.text();
+
+  canvas.innerHTML = html;
+
+  // Attach click and drag handlers to all components
+  document.querySelectorAll('.circuit-component').forEach(comp => {
+    attachComponentHandlers(comp);
+  });
+
+  updateComponentCount();
 }
 
-// Initial load
-updateComponentCount();
+// Canvas drag handlers for moving components
+canvas.addEventListener('mousemove', (e) => {
+  if (!draggedComponent) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left - dragOffsetX;
+  const y = e.clientY - rect.top - dragOffsetY;
+
+  // Update position visually (immediate feedback)
+  draggedComponent.style.left = x + 'px';
+  draggedComponent.style.top = y + 'px';
+});
+
+canvas.addEventListener('mouseup', async (e) => {
+  if (!draggedComponent) return;
+
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left - dragOffsetX;
+  const y = e.clientY - rect.top - dragOffsetY;
+
+  // Update position on server
+  await fetch(`scripts/switch_fetch.php?action=move_component&id=${draggedComponent.dataset.id}&x=${x}&y=${y}`);
+
+  draggedComponent = null;
+});
+
+// Fallback to clear drag state if mouse released outside canvas
+document.addEventListener('mouseup', () => {
+  draggedComponent = null;
+});
+
+// Update component count
+async function updateComponentCount() {
+  const response = await fetch('scripts/switch_fetch.php?action=get_state');
+  const data = await response.json();
+  document.getElementById('comp-count').textContent = data.project.components.length;
+  document.getElementById('circuit-status').textContent = data.simulation.isCircuitComplete ? 'Complete' : 'Incomplete';
+}
+
+// Initial load - render canvas from server
+renderCanvas();
 </script>
 
 <?php require_once __DIR__ . '/inc/footer.php'; ?>
