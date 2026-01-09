@@ -311,19 +311,45 @@ class CircuitAnalysis {
         $currents = [];
         $minR = SIMULATION_LIMITS['minResistance'];
         
+        // First pass: calculate currents for non-source branches
         foreach ($branches as $branch) {
             $v1 = $voltages[$branch->startNode] ?? 0.0;
             $v2 = $voltages[$branch->endNode] ?? 0.0;
             $deltaV = $v1 - $v2;
-            
-            if ($branch->type === 'source') {
-                // For voltage sources, current is determined by the circuit
-                // Would need full analysis to determine this properly
-                $currents[$branch->id] = 0.0; // Placeholder
-            } else {
+
+            if ($branch->type !== 'source') {
                 $impedanceMag = $branch->impedance->magnitude();
                 $current = $deltaV / max($impedanceMag, $minR);
                 $currents[$branch->id] = $current;
+            }
+        }
+
+        // Second pass: calculate voltage source currents using KCL
+        // Current through source = sum of currents leaving the positive node
+        foreach ($branches as $branch) {
+            if ($branch->type === 'source') {
+                $sourceCurrent = 0.0;
+
+                // Find all branches connected to the positive terminal (endNode for sources)
+                $positiveNode = $branch->endNode;
+
+                foreach ($branches as $otherBranch) {
+                    if ($otherBranch->id === $branch->id) continue;
+
+                    $current = $currents[$otherBranch->id] ?? 0.0;
+
+                    // Current leaving positive node
+                    if ($otherBranch->startNode === $positiveNode) {
+                        $sourceCurrent += $current;
+                    }
+                    // Current entering positive node
+                    if ($otherBranch->endNode === $positiveNode) {
+                        $sourceCurrent -= $current;
+                    }
+                }
+
+                // Source current flows from negative to positive internally
+                $currents[$branch->id] = abs($sourceCurrent);
             }
         }
         
@@ -353,6 +379,7 @@ class CircuitAnalysis {
     /**
      * AC circuit analysis with phasors
      * Returns complex voltages and currents
+     * Simplified iterative method using phasor magnitudes
      */
     public static function acNodalAnalysis(
         array $nodes,
@@ -360,14 +387,118 @@ class CircuitAnalysis {
         string $groundNodeId,
         float $frequency
     ): array {
-        // This would implement complex nodal analysis for AC circuits
-        // Using matrix methods (would need matrix library or implement)
-        // Placeholder for now - full implementation would use
-        // Modified Nodal Analysis (MNA) with complex numbers
-        
+        $omega = 2 * M_PI * $frequency;
+        $voltages = [];
+        $currents = [];
+
+        // Set ground node to 0V
+        $voltages[$groundNodeId] = ['magnitude' => 0.0, 'phase' => 0.0];
+
+        // Find AC voltage sources and set their connected nodes
+        foreach ($branches as $branch) {
+            if ($branch->type === 'source') {
+                if ($branch->startNode === $groundNodeId) {
+                    $voltages[$branch->endNode] = [
+                        'magnitude' => abs($branch->value),
+                        'phase' => 0.0
+                    ];
+                } else if ($branch->endNode === $groundNodeId) {
+                    $voltages[$branch->startNode] = [
+                        'magnitude' => abs($branch->value),
+                        'phase' => 0.0
+                    ];
+                }
+            }
+        }
+
+        // Simplified AC analysis - use impedance magnitudes
+        // For full accuracy, would need complex number arithmetic
+        $maxIterations = 100;
+        $tolerance = 1e-6;
+        $minZ = SIMULATION_LIMITS['minResistance'];
+
+        for ($iter = 0; $iter < $maxIterations; $iter++) {
+            $maxChange = 0.0;
+
+            foreach ($nodes as $node) {
+                if ($node->id === $groundNodeId || isset($voltages[$node->id])) {
+                    continue;
+                }
+
+                $sumAdmittance = 0.0;
+                $sumCurrents = 0.0;
+
+                foreach ($branches as $branch) {
+                    if ($branch->startNode === $node->id || $branch->endNode === $node->id) {
+                        $otherNodeId = $branch->startNode === $node->id
+                            ? $branch->endNode
+                            : $branch->startNode;
+
+                        $otherVoltage = $voltages[$otherNodeId]['magnitude'] ?? 0.0;
+
+                        if ($branch->type !== 'source') {
+                            $impedanceMag = $branch->impedance->magnitude();
+                            $admittance = 1 / max($impedanceMag, $minZ);
+                            $sumAdmittance += $admittance;
+                            $sumCurrents += $admittance * $otherVoltage;
+                        }
+                    }
+                }
+
+                if ($sumAdmittance > 0) {
+                    $newVoltageMag = $sumCurrents / $sumAdmittance;
+                    $oldVoltageMag = $voltages[$node->id]['magnitude'] ?? 0.0;
+                    $maxChange = max($maxChange, abs($newVoltageMag - $oldVoltageMag));
+                    $voltages[$node->id] = [
+                        'magnitude' => $newVoltageMag,
+                        'phase' => 0.0  // Simplified - would need complex arithmetic for phase
+                    ];
+                }
+            }
+
+            if ($maxChange < $tolerance) break;
+        }
+
+        // Calculate AC currents (magnitudes)
+        foreach ($branches as $branch) {
+            $v1 = $voltages[$branch->startNode]['magnitude'] ?? 0.0;
+            $v2 = $voltages[$branch->endNode]['magnitude'] ?? 0.0;
+            $deltaV = abs($v1 - $v2);
+
+            if ($branch->type === 'source') {
+                // Calculate source current using KCL
+                $sourceCurrent = 0.0;
+                $positiveNode = $branch->endNode;
+
+                foreach ($branches as $otherBranch) {
+                    if ($otherBranch->id === $branch->id) continue;
+                    $current = $currents[$otherBranch->id]['magnitude'] ?? 0.0;
+
+                    if ($otherBranch->startNode === $positiveNode) {
+                        $sourceCurrent += $current;
+                    }
+                    if ($otherBranch->endNode === $positiveNode) {
+                        $sourceCurrent -= $current;
+                    }
+                }
+
+                $currents[$branch->id] = [
+                    'magnitude' => abs($sourceCurrent),
+                    'phase' => 0.0
+                ];
+            } else {
+                $impedanceMag = $branch->impedance->magnitude();
+                $currentMag = $deltaV / max($impedanceMag, $minZ);
+                $currents[$branch->id] = [
+                    'magnitude' => $currentMag,
+                    'phase' => 0.0  // Simplified
+                ];
+            }
+        }
+
         return [
-            'voltages' => [],
-            'currents' => [],
+            'voltages' => $voltages,
+            'currents' => $currents,
             'frequency' => $frequency
         ];
     }

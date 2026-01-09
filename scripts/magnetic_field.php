@@ -272,7 +272,7 @@ class SphericalMagneticField {
         $rMag = $r->magnitude();
         
         // Apply Kunferman regularization
-        $rReg = SanityBuffer::regularizeDistance($rMag, $bufferScale);
+        $rReg = KunfermanBuffer::regularizeDistance($rMag, $bufferScale);
         
         // Current element vector (I * dl)
         $Idl = $currentDirection->scale($current * $segmentLength);

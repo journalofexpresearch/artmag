@@ -1,4 +1,4 @@
-<?php <?php
+<?php
 session_start();
 require_once __DIR__ . '/circuit_state.php';
 
@@ -126,12 +126,57 @@ try {
         
         // Calculate magnetic field at point
         case 'calc_field':
-            $lat = $_GET['lat'] ?? 0;
-            $lon = $_GET['lon'] ?? 0;
-            $alt = $_GET['alt'] ?? 0;
-            
-            // Simple response - just field magnitude
-            echo json_encode(['magnitude' => 0.00005]); // Placeholder
+            require_once __DIR__ . '/magnetic_field.php';
+
+            $lat = floatval($_GET['lat'] ?? 0);
+            $lon = floatval($_GET['lon'] ?? 0);
+            $alt = floatval($_GET['alt'] ?? 0);
+
+            // Collect all magnetic sources from circuit components
+            $sources = [];
+            foreach ($state->project->components as $comp) {
+                if ($comp->category === 'magnetic' && !$comp->isFailed) {
+                    switch ($comp->type) {
+                        case 'coil':
+                            $sources[] = [
+                                'type' => 'loop',
+                                'lat' => $comp->properties->latitude ?? 0,
+                                'lon' => $comp->properties->longitude ?? 0,
+                                'alt' => $comp->properties->altitude ?? 0,
+                                'radius' => $comp->properties->radius ?? 0.01,
+                                'turns' => $comp->properties->turns ?? 100,
+                                'current' => $comp->currentFlow
+                            ];
+                            break;
+                    }
+                }
+            }
+
+            // Calculate total field at point
+            $totalField = new Vector3(0, 0, 0);
+            foreach ($sources as $source) {
+                if ($source['type'] === 'loop') {
+                    $fieldContribution = SphericalMagneticField::geoCircularLoop(
+                        $source['lat'], $source['lon'], $source['alt'],
+                        $source['radius'],
+                        $source['turns'],
+                        $source['current'],
+                        $lat, $lon, $alt,
+                        72,  // segments
+                        1.0  // buffer scale
+                    );
+                    $totalField = $totalField->add($fieldContribution);
+                }
+            }
+
+            echo json_encode([
+                'field' => [
+                    'x' => $totalField->x,
+                    'y' => $totalField->y,
+                    'z' => $totalField->z
+                ],
+                'magnitude' => $totalField->magnitude()
+            ]);
             break;
         
         default:
