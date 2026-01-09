@@ -233,6 +233,87 @@ class CircuitState {
             }
         }
         
+        // Create branches from components (2-port components)
+        foreach ($this->project->components as $comp) {
+            if (count($comp->ports) >= 2 && $comp->type !== 'ground') {
+                $impedance = null;
+                $branchType = 'resistor';
+                $value = 0.0;
+
+                switch ($comp->type) {
+                    case 'resistor':
+                        $value = $comp->properties->resistance ?? 1000;
+                        $impedance = Impedance::resistor($value);
+                        $branchType = 'resistor';
+                        break;
+
+                    case 'capacitor':
+                        $value = $comp->properties->capacitance ?? 1e-6;
+                        $frequency = $settings['frequency'] ?? 60;
+                        $impedance = Impedance::capacitor($value, $frequency);
+                        $branchType = 'capacitor';
+                        break;
+
+                    case 'inductor':
+                    case 'coil':
+                    case 'solenoid':
+                        $value = $comp->properties->inductance ?? 1e-3;
+                        $frequency = $settings['frequency'] ?? 60;
+                        $impedance = Impedance::inductor($value, $frequency);
+                        $branchType = 'inductor';
+                        break;
+
+                    case 'dcSource':
+                        $value = $comp->properties->voltage ?? 12;
+                        $impedance = Impedance::resistor(0.01); // Internal resistance
+                        $branchType = 'source';
+                        break;
+
+                    case 'acSource':
+                        $value = $comp->properties->voltage ?? 120;
+                        $impedance = Impedance::resistor(0.01);
+                        $branchType = 'source';
+                        break;
+
+                    case 'wire':
+                        $value = 0.01;
+                        $impedance = Impedance::resistor(0.01);
+                        $branchType = 'wire';
+                        break;
+
+                    case 'switch':
+                        if ($comp->properties->isOpen ?? true) {
+                            $impedance = Impedance::resistor(1e12); // Open = very high resistance
+                            $value = 1e12;
+                        } else {
+                            $impedance = Impedance::resistor(0.01); // Closed = low resistance
+                            $value = 0.01;
+                        }
+                        $branchType = 'switch';
+                        break;
+
+                    default:
+                        // Default: small resistance
+                        $impedance = Impedance::resistor(0.01);
+                        $value = 0.01;
+                        $branchType = 'component';
+                        break;
+                }
+
+                if ($impedance) {
+                    $branches[] = new CircuitBranch(
+                        id: $comp->id,
+                        startNode: $comp->ports[0]->id,
+                        endNode: $comp->ports[1]->id,
+                        current: 0.0,
+                        impedance: $impedance,
+                        type: $branchType,
+                        value: $value
+                    );
+                }
+            }
+        }
+
         // Create branches from wires
         foreach ($this->project->wires as $wire) {
             $branches[] = new CircuitBranch(
@@ -261,7 +342,77 @@ class CircuitState {
             // Calculate circuit voltages and currents
             $voltages = CircuitAnalysis::nodalAnalysis($nodes, $branches, $groundNodeId);
             $currents = CircuitAnalysis::calculateBranchCurrents($branches, $voltages);
-            
+
+            // Update component electrical states from analysis
+            foreach ($this->project->components as &$comp) {
+                // Find the branch for this component
+                $branchCurrent = $currents[$comp->id] ?? 0.0;
+
+                // Update current flow
+                $comp->currentFlow = abs($branchCurrent);
+
+                // Calculate voltage drop across component
+                if (count($comp->ports) >= 2) {
+                    $v1 = $voltages[$comp->ports[0]->id] ?? 0.0;
+                    $v2 = $voltages[$comp->ports[1]->id] ?? 0.0;
+                    $comp->voltageDrop = abs($v1 - $v2);
+                }
+
+                // Calculate power dissipation
+                switch ($comp->type) {
+                    case 'resistor':
+                    case 'wire':
+                        $resistance = $comp->properties->resistance ??
+                                    ($comp->type === 'wire' ? 0.01 : 1000);
+                        $comp->powerDissipation = CircuitAnalysis::powerDissipation(
+                            $comp->currentFlow,
+                            $resistance
+                        );
+                        break;
+
+                    case 'dcSource':
+                    case 'acSource':
+                        // Power supplied by source (negative dissipation conceptually)
+                        $comp->powerDissipation = abs($comp->currentFlow * ($comp->properties->voltage ?? 0));
+                        break;
+
+                    case 'inductor':
+                    case 'coil':
+                    case 'solenoid':
+                        // Inductors have wire resistance
+                        $wireResistance = 0.1; // Simplified
+                        $comp->powerDissipation = CircuitAnalysis::powerDissipation(
+                            $comp->currentFlow,
+                            $wireResistance
+                        );
+                        break;
+
+                    case 'capacitor':
+                        // Ideal capacitors don't dissipate power, but ESR causes some
+                        $esr = 0.01; // Equivalent Series Resistance
+                        $comp->powerDissipation = CircuitAnalysis::powerDissipation(
+                            $comp->currentFlow,
+                            $esr
+                        );
+                        break;
+
+                    default:
+                        $comp->powerDissipation = 0.0;
+                        break;
+                }
+            }
+
+            // Update wire states
+            foreach ($this->project->wires as &$wire) {
+                $wireCurrent = $currents[$wire->id] ?? 0.0;
+                $wire->current = abs($wireCurrent);
+
+                // Calculate voltage drop across wire
+                if (isset($voltages[$wire->startPortId]) && isset($voltages[$wire->endPortId])) {
+                    $wire->voltageDrop = abs($voltages[$wire->startPortId] - $voltages[$wire->endPortId]);
+                }
+            }
+
             // Update component thermal states
             foreach ($this->project->components as &$comp) {
                 $thermalProps = ThermalModel::getDefaultThermalProperties(
